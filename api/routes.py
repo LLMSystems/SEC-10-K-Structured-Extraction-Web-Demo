@@ -1,5 +1,6 @@
 """
-路由定義：POST /jobs, GET /jobs/{job_id}, GET /filings/{accession_number}
+路由定義：POST /jobs, GET /jobs/{job_id}, GET /filings/{accession_number},
+         POST /xbrl-markdown
 queue 和 cache 由 main.py 在 lifespan 啟動時注入。
 """
 
@@ -10,11 +11,14 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel
 
 from models.job import JobCreateRequest, JobCreateResponse, JobStatusResponse
 from cache import CacheService
 from sec_10k_pipeline.models import FilingInput, FilingOutput
 from utils import parse_sec_url
+from item8_markdown import get_item8_markdown
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -102,3 +106,27 @@ async def get_filing(accession_number: str):
     if result is None:
         raise HTTPException(status_code=404, detail="Filing not found in cache")
     return result
+
+
+class XbrlMarkdownRequest(BaseModel):
+    cik: str
+    accession_number: str
+
+@router.post("/xbrl-markdown", response_class=PlainTextResponse)
+async def create_xbrl_markdown(req: XbrlMarkdownRequest):
+    """
+    同步擷取 SEC XBRL 資料並渲染為 Markdown。
+    直接返回 text/plain，適合快速預覽或下載。
+    """
+    try:
+        markdown = await asyncio.to_thread(
+            get_item8_markdown,
+            req.cik,
+            req.accession_number,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        logger.exception("xbrl-markdown failed for %s / %s", req.cik, req.accession_number)
+        raise HTTPException(status_code=500, detail=str(exc))
+    return PlainTextResponse(content=markdown, media_type="text/markdown; charset=utf-8")

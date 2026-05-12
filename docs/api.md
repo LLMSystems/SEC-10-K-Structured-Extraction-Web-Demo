@@ -12,12 +12,14 @@ uvicorn src.api.main:app --reload
 
 ## 概覽
 
-非同步 Job Queue 架構：送出請求後立即取得 `job_id`，再用 polling 查結果。
+非同步 Job Queue 架構：送出請求後立即取得 `job_id`，再用 polling 查結果。  
+另提供同步 XBRL Markdown 端點，適合直接取得財務報表的 Markdown 渲染。
 
 ```
-POST /jobs          送出解析請求 → 取得 job_id
-GET  /jobs/{id}     輪詢 job 狀態與結果
-GET  /filings/{acc} 直接查 cache（已完成才有）
+POST /jobs              送出解析請求 → 取得 job_id
+GET  /jobs/{id}         輪詢 job 狀態與結果
+GET  /filings/{acc}     直接查 cache（已完成才有）
+POST /xbrl-markdown     同步擷取 XBRL 並渲染為 Markdown
 ```
 
 **Cache 行為**：相同的 `accession_number` 只處理一次。重複送出時 `cache_hit=true`，`GET /jobs/{id}` 可立即取到結果。
@@ -124,6 +126,78 @@ bypass Job 系統，直接回傳已快取的 `FilingOutput`。適合確定已處
 | 狀態碼 | 原因 |
 |---|---|
 | `404` | 此 accession number 尚未處理過，或不在 cache 中；**不會**自動觸發處理 |
+
+---
+
+### `POST /xbrl-markdown` — 同步擷取 XBRL 並渲染為 Markdown
+
+直接從 SEC EDGAR 擷取指定 filing 的 XBRL 資料，並渲染為 Markdown 文字回傳。  
+適合：快速預覽財務報表、下載可讀報告、LLM 輸入前置處理。
+
+> **注意**：此端點為同步阻塞操作，需向 SEC 發出多次網路請求，通常需時 5–15 秒。
+
+**Request Body**
+
+```json
+{
+  "cik": "0000104169",
+  "accession_number": "0000104169-24-000056"
+}
+```
+
+| 欄位 | 必填 | 說明 |
+|---|---|---|
+| `cik` | ✓ | SEC 公司識別碼（10 碼或原始格式均可） |
+| `accession_number` | ✓ | 格式 `XXXXXXXXXX-YY-ZZZZZZ` |
+
+**Response** `200 OK`
+
+`Content-Type: text/markdown; charset=utf-8`
+
+回傳包含以下章節的 Markdown 文字：
+- 報告標題與基本資訊
+- **Main Statements**：Income Statement、Balance Sheet、Cash Flow Statement 等財務報表（表格格式）
+- **Numeric Disclosures**：數字型揭露附註
+- **Text Disclosures**：文字型揭露附註（含 HTML 轉換）
+
+**Errors**
+
+| 狀態碼 | 原因 |
+|---|---|
+| `422` | `cik` 或 `accession_number` 格式無效、SEC 找不到對應 filing |
+| `500` | 擷取或解析過程中發生非預期錯誤 |
+
+**curl 範例**
+
+```bash
+curl -X POST http://localhost:8000/xbrl-markdown \
+  -H "Content-Type: application/json" \
+  -d '{"cik":"0000104169","accession_number":"0000104169-24-000056"}' \
+  -o report.md
+```
+
+**Python 範例**
+
+```python
+import httpx
+
+resp = httpx.post(
+    "http://localhost:8000/xbrl-markdown",
+    json={"cik": "0000104169", "accession_number": "0000104169-24-000056"},
+    timeout=60,
+)
+resp.raise_for_status()
+markdown = resp.text
+print(markdown[:500])
+```
+
+**直接使用 Python 函數（不經 HTTP）**
+
+```python
+from api.item8_markdown import get_item8_markdown
+
+markdown = get_item8_markdown("0000104169", "0000104169-24-000056")
+```
 
 ---
 
