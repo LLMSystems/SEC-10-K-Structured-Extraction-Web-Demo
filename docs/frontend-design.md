@@ -383,6 +383,31 @@ interface InputStore {
 }
 ```
 
+### `useXbrlStore`（Item 8 XBRL Markdown 快取）
+
+獨立於 `useJobStore`，用來管理對 `POST /xbrl-markdown` 的同步請求結果。Per-accession 快取確保使用者在多份 filing 之間切換時各自獨立，並支援同時觀察其中一份的載入狀態而不影響其他份。
+
+```typescript
+interface XbrlStore {
+  // 三個 per-accession Map/Set，分別代表「已快取」「載入中」「錯誤」
+  cache: Map<string, string>          // accession_number → markdown text
+  loading: Set<string>                // accession_number 集合
+  errors: Map<string, string>         // accession_number → 錯誤訊息
+
+  get(accession: string): string | null
+  isLoading(accession: string): boolean
+  getError(accession: string): string | null
+
+  // Lazy fetch — 只在 ItemContent 切到 XBRL tab 時觸發
+  fetchXbrl(cik: string, accession: string): Promise<void>
+  retry(cik: string, accession: string): Promise<void>
+}
+```
+
+**設計要點**：
+- 不做 abort：5–15 秒的請求若使用者切走，讓它跑完寫進 cache，下次回來即時顯示。
+- 不持久化：XBRL Markdown 可能達數百 KB，放 `localStorage` 容易超出配額，且 reload 後重打可接受（在原有的 Job cache 之上，使用者只多等一次）。
+
 ---
 
 ## 七、API 互動流程
@@ -458,6 +483,10 @@ function startPolling(jobId: string) {
 
 當 `cache_hit = true`，跳過 polling，直接展示 **0.3 秒** 的「⚡ 快取命中」提示動畫，再導向結果頁，強調快取的速度優勢。
 
+### Item 8 XBRL 同步請求流程
+
+`POST /xbrl-markdown` 為同步阻塞、5–15 秒、回傳 `text/markdown`。不走 Job Queue，由 `useXbrlStore.fetchXbrl()` 直接觸發；詳細互動見〈[十二、Item 8 XBRL 整合](#十二item-8-xbrl-整合)〉。
+
 ---
 
 ## 八、Item Status 視覺呈現細節
@@ -531,6 +560,69 @@ function startPolling(jobId: string) {
 
 ---
 
+## 十二、Item 8 XBRL 整合
+
+`Part II / Item 8 — Financial Statements and Supplementary Data` 的 HTML 解析常因表格密度高而失真。後端另提供 `POST /xbrl-markdown` 同步端點（5–15 秒，回傳純 Markdown），把同一份 filing 的 XBRL 直接渲染成結構化的財務報表。前端在 Item 8 內以 Tab 切換兩種視圖。
+
+### 適用條件
+
+- 僅當 `item.part === 'Part II'` 且 `item.item_number === '8'`
+- 且 `status` 為 `extracted` 或 `incorporated_by_reference`（其他狀態本身就沒內容可比較）
+
+### UI 與互動
+
+```
+┌─ Part II · Item 8 ─────────────────── [已解析] ┐
+│  Financial Statements and Supplementary Data    │
+│  字元範圍 124,000–286,400                       │
+│                                                 │
+│  ┌─────────────┐  ┌─────────────┐               │
+│  │ HTML 原文   │  │✨ XBRL 結構化│  [下載 .md]  │  ← 切到 XBRL 且載完才顯示下載
+│  └─────────────┘  └─────────────┘               │
+│                                                 │
+│  （依切換顯示 HTML markdown 或 XBRL markdown）   │
+└─────────────────────────────────────────────────┘
+```
+
+- 預設選中 `HTML 原文`，避免一開啟 Item 8 就觸發 5–15 秒請求。
+- 切到 `XBRL 結構化` 時若 cache 沒有結果且不在載入中，才會呼叫 `xbrl.fetchXbrl(cik, accession)`。
+- 切回 `HTML 原文` 不取消請求；讓它跑完寫入 cache，下次切回 `XBRL` 即時呈現。
+- 切到別的 Item / Part 時 `activeTab` 重置回 `html`（透過 `watch(props.item, ...)`）。
+
+### 三種子狀態的視覺
+
+| 子狀態 | 呈現 |
+|--------|------|
+| `loading` | 灰色提示卡（含 spinner、訊息「向 SEC 取得 XBRL 財報資料中…」、「已等待 N 秒（一般需要 5–15 秒）」）+ 3 條 Skeleton 模擬表格區塊 |
+| `error` | 紅框警告卡，顯示後端回傳的 detail，含「重試」按鈕；422 自動轉換訊息為「此 filing 沒有 XBRL 資料」 |
+| `ready` | 沿用 `.markdown-body` 樣式渲染（已能處理 HTML `<table>`）；TabsList 右側出現「下載 .md」按鈕，將 cache 寫成 `${accession}-item8-xbrl.md` 直接下載 |
+
+### 已等待秒數
+
+```typescript
+// 只在載入中 tick，watch xbrlLoading 切換 setInterval
+watch(xbrlLoading, (loading) => {
+  if (loading) startElapsed()
+  else stopElapsed()
+})
+```
+
+`onBeforeUnmount` 必須清掉 timer，避免切換 Item 後仍持續累加。
+
+### 為何不做 AbortController
+
+- 同份 filing 在使用者切走後再切回，本來就期望直接看到結果，中斷反而要重打。
+- 不同 filing 是不同 cache key，舊請求完成寫入舊 key 不會干擾新 filing 的 UI；多 in-flight 請求風險低。
+- 真要中斷只在「重 mount 應用 / Pinia 全 reset」時發生，瀏覽器自會丟棄連線。
+
+### 不做的事
+
+- **不持久化到 localStorage**：單份 XBRL Markdown 可達數百 KB，超出配額機率高；session 內 Pinia cache 足夠。
+- **不預載**：使用者不一定會看 Item 8，不應對每個 filing 都付一次 5–15 秒成本。
+- **不取代 HTML 原文**：兩者並列，方便對照與還原能力的稽核。
+
+---
+
 ## 十一、建議實作順序
 
 ```
@@ -552,4 +644,12 @@ Phase 3：細節打磨
   [ ] 響應式調整（Drawer 模式）
   [ ] 快捷範例 QuickExamples
   [ ] 錯誤狀態處理（failed job、404、timeout）
+
+Phase 4：Item 8 XBRL 整合
+  [ ] api.xbrlMarkdown() — 處理 text/markdown 回應
+  [ ] useXbrlStore — per-accession cache / loading / error
+  [ ] ItemContent 偵測 Item 8 並掛 Tabs
+  [ ] Loading 提示卡 + Skeleton + 已等待秒數
+  [ ] Error 卡 + 重試
+  [ ] 下載 .md 按鈕
 ```
