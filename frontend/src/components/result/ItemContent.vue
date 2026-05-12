@@ -1,13 +1,34 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { Ban, ExternalLink, FileText, Minus } from 'lucide-vue-next'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import {
+  AlertCircle,
+  Ban,
+  Download,
+  ExternalLink,
+  FileText,
+  Minus,
+  RotateCw,
+  Sparkles,
+} from 'lucide-vue-next'
 import Badge from '@/components/ui/Badge.vue'
+import Button from '@/components/ui/Button.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
+import Tabs from '@/components/ui/Tabs.vue'
+import TabsList from '@/components/ui/TabsList.vue'
+import TabsTrigger from '@/components/ui/TabsTrigger.vue'
+import TabsContent from '@/components/ui/TabsContent.vue'
+import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import MonoText from '@/components/common/MonoText.vue'
 import { renderMarkdown } from '@/lib/markdown'
 import { statusLabel } from '@/lib/statusLabels'
+import { useJobStore } from '@/stores/job'
+import { useXbrlStore } from '@/stores/xbrl'
 import type { FilingItem } from '@/types/api'
 
 const props = defineProps<{ item: FilingItem | null }>()
+
+const jobStore = useJobStore()
+const xbrl = useXbrlStore()
 
 const charRangeText = computed(() => {
   if (!props.item?.char_range) return null
@@ -19,6 +40,91 @@ const renderedHtml = computed(() => {
   if (!props.item?.content_text) return ''
   return renderMarkdown(props.item.content_text)
 })
+
+// Item 8 = "Financial Statements and Supplementary Data" in Part II.
+// Only offer the XBRL toggle when the item has extractable content; for
+// reserved / not_applicable / missing there's nothing to compare against.
+const isItem8 = computed(
+  () =>
+    props.item?.part === 'Part II' &&
+    props.item?.item_number === '8' &&
+    (props.item?.status === 'extracted' ||
+      props.item?.status === 'incorporated_by_reference'),
+)
+
+const cik = computed(() => jobStore.filingResult?.filing_info.cik ?? null)
+const accession = computed(
+  () => jobStore.filingResult?.filing_info.accession_number ?? null,
+)
+
+const xbrlMarkdown = computed(() =>
+  accession.value ? xbrl.get(accession.value) : null,
+)
+const xbrlLoading = computed(() =>
+  accession.value ? xbrl.isLoading(accession.value) : false,
+)
+const xbrlError = computed(() =>
+  accession.value ? xbrl.getError(accession.value) : null,
+)
+const renderedXbrlHtml = computed(() =>
+  xbrlMarkdown.value ? renderMarkdown(xbrlMarkdown.value) : '',
+)
+
+const activeTab = ref<'html' | 'xbrl'>('html')
+
+// Reset to the HTML tab whenever the navigator picks a different item.
+watch(
+  () => props.item,
+  () => {
+    activeTab.value = 'html'
+  },
+)
+
+watch(activeTab, (v) => {
+  if (v !== 'xbrl') return
+  if (!cik.value || !accession.value) return
+  if (xbrlMarkdown.value || xbrlLoading.value) return
+  xbrl.fetchXbrl(cik.value, accession.value)
+})
+
+// Elapsed-seconds counter, only ticks while the XBRL request is in flight.
+const elapsedSec = ref(0)
+let elapsedTimer: ReturnType<typeof setInterval> | null = null
+
+function startElapsed() {
+  elapsedSec.value = 0
+  stopElapsed()
+  elapsedTimer = setInterval(() => {
+    elapsedSec.value += 1
+  }, 1000)
+}
+function stopElapsed() {
+  if (elapsedTimer !== null) {
+    clearInterval(elapsedTimer)
+    elapsedTimer = null
+  }
+}
+watch(xbrlLoading, (loading) => {
+  if (loading) startElapsed()
+  else stopElapsed()
+})
+onBeforeUnmount(stopElapsed)
+
+function onRetryXbrl() {
+  if (!cik.value || !accession.value) return
+  xbrl.retry(cik.value, accession.value)
+}
+
+function onDownloadXbrl() {
+  if (!xbrlMarkdown.value || !accession.value) return
+  const blob = new Blob([xbrlMarkdown.value], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${accession.value}-item8-xbrl.md`
+  a.click()
+  URL.revokeObjectURL(url)
+}
 </script>
 
 <template>
@@ -81,9 +187,89 @@ const renderedHtml = computed(() => {
       </div>
     </div>
 
-    <!-- Main content: extracted OR incorporated_by_reference (both can have content_text) -->
+    <!-- Item 8: HTML / XBRL toggle -->
+    <template v-if="isItem8">
+      <Tabs v-model="activeTab" class="space-y-3">
+        <div class="flex flex-wrap items-center gap-3">
+          <TabsList>
+            <TabsTrigger value="html">HTML 原文</TabsTrigger>
+            <TabsTrigger value="xbrl">
+              <Sparkles class="mr-1 h-3 w-3" />
+              XBRL 結構化
+            </TabsTrigger>
+          </TabsList>
+          <Button
+            v-if="activeTab === 'xbrl' && xbrlMarkdown"
+            variant="outline"
+            size="sm"
+            class="ml-auto"
+            @click="onDownloadXbrl"
+          >
+            <Download class="h-3.5 w-3.5" />
+            下載 .md
+          </Button>
+        </div>
+
+        <TabsContent value="html">
+          <div
+            class="markdown-body text-[15px] leading-[1.75] text-foreground"
+            v-html="renderedHtml"
+          />
+        </TabsContent>
+
+        <TabsContent value="xbrl">
+          <!-- Loading -->
+          <div v-if="xbrlLoading" class="space-y-4">
+            <div
+              class="flex items-center gap-3 rounded-lg border border-border bg-muted/30 p-4"
+            >
+              <LoadingSpinner class="text-primary" />
+              <div class="flex-1 text-sm">
+                <p class="font-medium text-foreground">向 SEC 取得 XBRL 財報資料中…</p>
+                <p class="mt-0.5 text-xs text-muted-foreground">
+                  已等待 {{ elapsedSec }} 秒（一般需要 5–15 秒）
+                </p>
+              </div>
+            </div>
+            <Skeleton class="h-32 w-full" />
+            <Skeleton class="h-32 w-full" />
+            <Skeleton class="h-24 w-full" />
+          </div>
+
+          <!-- Error -->
+          <div
+            v-else-if="xbrlError"
+            class="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4"
+          >
+            <AlertCircle class="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+            <div class="flex-1 text-sm">
+              <p class="font-medium text-foreground">XBRL 資料取得失敗</p>
+              <p class="mt-1 text-muted-foreground">{{ xbrlError }}</p>
+              <Button variant="outline" size="sm" class="mt-3" @click="onRetryXbrl">
+                <RotateCw class="h-3.5 w-3.5" />
+                重試
+              </Button>
+            </div>
+          </div>
+
+          <!-- Rendered Markdown -->
+          <div
+            v-else-if="renderedXbrlHtml"
+            class="markdown-body text-[15px] leading-[1.75] text-foreground"
+            v-html="renderedXbrlHtml"
+          />
+
+          <!-- Fallback (shouldn't normally appear because watch triggers fetch) -->
+          <div v-else class="text-sm text-muted-foreground">
+            正在準備載入 XBRL 資料…
+          </div>
+        </TabsContent>
+      </Tabs>
+    </template>
+
+    <!-- Non-Item 8 extracted / incorporated content (unchanged path) -->
     <template
-      v-if="
+      v-else-if="
         (item.status === 'extracted' || item.status === 'incorporated_by_reference') &&
         renderedHtml
       "

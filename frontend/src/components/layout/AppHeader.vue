@@ -73,7 +73,7 @@ function goHome() {
           <Moon v-else class="h-4 w-4" />
         </Button>
         <a
-          href="https://github.com/"
+          href="https://github.com/LLMSystems/SEC-10-K-Structured-Extraction-Web-Demo"
           target="_blank"
           rel="noopener"
           class="inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"

@@ -52,4 +52,24 @@ export const api = {
   getFiling(accessionNumber: string): Promise<FilingOutput> {
     return request<FilingOutput>(`/filings/${accessionNumber}`)
   },
+  // POST /xbrl-markdown — synchronous, 5–15s, returns text/markdown
+  async xbrlMarkdown(cik: string, accession_number: string): Promise<string> {
+    const resp = await fetch(`${BASE_URL}/xbrl-markdown`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cik, accession_number }),
+    })
+    if (!resp.ok) {
+      let message = `Request failed with status ${resp.status}`
+      try {
+        const data = (await resp.json()) as { detail?: unknown }
+        if (typeof data.detail === 'string') message = data.detail
+        else if (data.detail) message = JSON.stringify(data.detail)
+      } catch {
+        // ignore non-JSON error bodies
+      }
+      throw new ApiError(resp.status, message)
+    }
+    return resp.text()
+  },
 }
