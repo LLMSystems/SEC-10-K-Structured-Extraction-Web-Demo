@@ -76,28 +76,6 @@ SEC-10-K-Structured-Extraction-Web-Demo/
 └── README.md
 ```
 
-### 後端資料流
-
-```
-Client ──POST /jobs──▶ Router ──▶ Cache 查 accession_number?
-                                    │
-                          ┌─ hit ──▶ 直接建 done job ──▶ 回 cache_hit=true
-                          │
-                          └─ miss ─▶ 建 pending job ──▶ JobQueue
-                                                          │
-                                                          ▼
-                                                      Worker（asyncio）
-                                                          │
-                                                          ├── AsyncPipeline（httpx fetch）
-                                                          ├── Parser（regex / LLM / hybrid）
-                                                          └── Postprocessor
-                                                          │
-                                                          ▼
-                                                      寫入 filings cache
-```
-
----
-
 ## 三、技術選型
 
 ### 後端
@@ -125,7 +103,7 @@ Client ──POST /jobs──▶ Router ──▶ Cache 查 accession_number?
 | State | **Pinia**（`^3.0`） | 全域狀態管理 |
 | UI Kit | **shadcn-vue** + **Tailwind CSS v4** | Zinc 主題、Light/Dark 雙模式 |
 | Icons | **lucide-vue-next** | 圖示 |
-| Markdown | **markdown-it** + **dompurify** | Item 8 Markdown 渲染與消毒 |
+| Markdown | **markdown-it** + **dompurify** | Item 8 Markdown 渲染 |
 
 ---
 
@@ -159,6 +137,7 @@ npm run dev
 ```
 
 ### 3. 環境變數
+**後端**
 
 | 變數 | 預設值 | 說明 |
 |---|---|---|
@@ -166,6 +145,14 @@ npm run dev
 | `CORS_ORIGINS` | `http://localhost:5173` | 允許跨域來源（逗號分隔） |
 
 可在 `api/.env` 設定。
+
+**前端**
+
+| 變數 | 預設值 | 說明 |
+|---|---|---|
+| `VITE_API_BASE_URL` | `自行填入` | 後端網址 |
+
+可在 `frontend/.env` 設定。
 
 ### 4. 端到端測試
 
