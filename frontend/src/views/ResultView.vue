@@ -99,7 +99,7 @@ const isError = computed(() => jobStore.phase === 'error' && !jobStore.filingRes
   <!-- Loaded state -->
   <div
     v-else-if="jobStore.filingResult"
-    class="mx-auto max-w-screen-2xl px-4 py-4 animate-in fade-in duration-300"
+    class="px-4 py-4 animate-in fade-in duration-300"
   >
     <!-- Sub-header / actions -->
     <div class="mb-3 flex items-center justify-between">

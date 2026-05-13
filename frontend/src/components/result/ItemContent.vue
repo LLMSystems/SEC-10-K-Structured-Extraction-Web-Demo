@@ -139,7 +139,7 @@ function onDownloadXbrl() {
   <article
     v-else
     :key="`${item.part}-${item.item_number}`"
-    class="mx-auto max-w-3xl px-8 py-10 animate-in fade-in slide-in-from-right-1 duration-200"
+    class="px-8 py-10 animate-in fade-in slide-in-from-right-1 duration-200"
   >
     <header class="mb-8">
       <div class="flex items-center gap-2 text-xs text-muted-foreground">
