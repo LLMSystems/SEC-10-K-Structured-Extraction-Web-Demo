@@ -8,7 +8,7 @@ LLM Parser（Stub）
 """
 
 from __future__ import annotations
-from sec_10k_pipeline.models import RawItem, FilingMetadata
+from sec_10k_pipeline.models import RawItem, FilingMetadata, PreprocessedDocument
 from sec_10k_pipeline.parsers.base import BaseParser, ParseResult
 
 
@@ -30,7 +30,7 @@ class LLMParser(BaseParser):
     def name(self) -> str:
         return f"llm:{self.model}"
 
-    def parse(self, text: str, metadata: FilingMetadata) -> ParseResult:
+    def parse(self, doc: PreprocessedDocument, metadata: FilingMetadata) -> ParseResult:
         """
         TODO: 實作 LLM 呼叫邏輯。
 

@@ -12,7 +12,7 @@ Regex Parser
 
 from __future__ import annotations
 import re
-from sec_10k_pipeline.models import RawItem, FilingMetadata
+from sec_10k_pipeline.models import RawItem, FilingMetadata, PreprocessedDocument
 from sec_10k_pipeline.parsers.base import BaseParser, ParseResult
 from sec_10k_pipeline.patterns import (
     ITEM_NUMBERS,
@@ -32,7 +32,8 @@ class RegexParser(BaseParser):
     def name(self) -> str:
         return "regex"
 
-    def parse(self, text: str, metadata: FilingMetadata) -> ParseResult:
+    def parse(self, doc: PreprocessedDocument, metadata: FilingMetadata) -> ParseResult:
+        text = doc.text
         warnings: list[str] = []
 
         # 1. 找所有疑似 Item 標題的位置
