@@ -18,6 +18,7 @@ from sec_10k_pipeline.patterns import (
     ITEM_NUMBERS,
     HTML_TAG_PATTERN,
     BY_REF_PATTERN,
+    FIN_STMT_BY_REF_PATTERN,
     NOT_APPLICABLE_PATTERN,
     RESERVED_PATTERN,
     MINE_SAFETY_NA_PATTERN,
@@ -188,11 +189,36 @@ class PostProcessor:
         # content_text 仍保留原始（含 HTML）以便 Markdown 正確渲染表格。
         plain = _strip_html(stripped)
 
+        # 0. 內容實質為空（去 HTML 後沒有任何文字）→ 不適用（如 Item 16 留白）
+        if not plain.strip():
+            return ItemResult(
+                part=part,
+                item_number=num,
+                item_title=std_title,
+                content_text=None,
+                char_range=None,
+                status="not_applicable",
+            )
+
         # 1. 偵測 incorporated_by_reference（只對 Part III,item 8 檢查）
         #    其他 Part 的 Item 內文也可能出現此字樣（例如引用 Exhibit），
         #    但不代表整個 Item 是空的，不應標記為此 status。
         PART_III_ITEMS = {"8", "10", "11", "12", "13", "14"}
         if num in PART_III_ITEMS and BY_REF_PATTERN.search(plain):
+            return ItemResult(
+                part=part,
+                item_number=num,
+                item_title=std_title,
+                content_text=stripped,
+                char_range=self._item_char_range(raw),
+                status="incorporated_by_reference",
+            )
+
+        # 1b. Item 8 財報以「見 F-pages / 另頁」方式呈現：內容只是一段短指標
+        #     （如 "See Index to Consolidated Financial Statements"、"appear on
+        #     pages 162-314"），實際報表置於文件他處。內容夠長時代表報表就在本段，
+        #     不應誤判，故加長度上限。
+        if num == "8" and len(plain) < 1000 and self._looks_like_financial_by_reference(plain):
             return ItemResult(
                 part=part,
                 item_number=num,
@@ -233,13 +259,7 @@ class PostProcessor:
         #      (a) 任一行「整行就是」N/A token（None / N/A / Not Applicable），或
         #      (b) 跳過編號行後的第一行內容本身是 N/A 語句（如 "Not applicable to ..."）。
         plain_body = plain.split("\n", 1)[-1].strip()       # 給 Mine Safety 用
-        content_lines = self._lines_after_heading(plain, num, std_title)
-        content_body = "\n".join(content_lines)
-        first_content_line = content_lines[0] if content_lines else ""
-        looks_na = any(self._is_na_token(line) for line in content_lines) or (
-            len(first_content_line) < 100 and NOT_APPLICABLE_PATTERN.search(first_content_line)
-        )
-        if len(content_body) < 500 and looks_na:
+        if self._looks_not_applicable(plain, num, std_title):
             return ItemResult(
                 part=part,
                 item_number=num,
@@ -345,32 +365,68 @@ class PostProcessor:
         norm = self._normalize_ws(line).strip(" .;:").lower()
         return norm in self._NA_TOKENS
 
-    def _lines_after_heading(self, plain: str, num: str, std_title: str) -> list[str]:
-        """
-        跳過開頭的 Item 編號行與標準標題行，回傳其後的非空白內容行。
+    # 實質長句的字數門檻：超過此長度且非標題/非 NA 宣告的行，視為「有實質內容」
+    _SUBSTANTIVE_LEN = 80
 
-        處理標題被拆成多行的情況，例如：
-            ITEM 1B.
-            UNRESOLVED STAFF COMMENTS
-            None.
-        會回傳 ["None."]。
+    def _looks_not_applicable(self, plain: str, num: str, std_title: str) -> bool:
         """
+        判斷「去 HTML 後的內容」是否實質上只是不適用宣告（None / N/A /
+        Not Applicable）。為 _classify 與外部（如 GT 標註正規化腳本）共用的
+        單一事實來源，確保 parser 與 ground truth 用同一套 NA 判斷。
+
+        SEC 文件的標題很髒（換行、斷字、標點、大小寫不一），靠「精準跳過標題」
+        太脆弱，故改用：
+
+          內容夠短（< 500 字）
+          且 有 N/A 宣告（任一行是 None/N/A token，或短行含 N/A 語句）
+          且 扣掉標題行與 N/A 行後，沒有任何「實質長句」（>= 80 字的非標題、
+             非 N/A 行）
+
+        最後一條用來區分像 Item 15 那種「多段內容裡夾了一行 None.（指財報附表）」
+        的情況——它有一句實質長句（"The responses ... set forth under Item 8
+        above"），因此不算整個 Item 不適用。標題以「子字串模糊比對」忽略，
+        容忍換行/標點/斷字。
+        """
+        lines = self._lines_after_item_heading(plain, num)
+        body = "\n".join(lines)
+        if not body or len(body) >= 500:
+            return False
+
+        # 合併成單行（折疊換行），讓被斷行的 N/A 片語（"Not\napplicable."）也能命中。
+        body_joined = self._normalize_ws(" ".join(lines))
+        has_na = (
+            any(self._is_na_token(l) for l in lines)
+            or any(len(l) < 100 and NOT_APPLICABLE_PATTERN.search(l) is not None for l in lines)
+            or (len(body_joined) < 120 and NOT_APPLICABLE_PATTERN.search(body_joined) is not None)
+        )
+        if not has_na:
+            return False
+
         title_norm = self._normalize_ws(std_title).lower()
-        item_heading_re = re.compile(rf"^item\s+{re.escape(num)}\b", re.IGNORECASE)
+        for line in lines:
+            norm = self._normalize_ws(line).lower()
+            if self._is_na_token(line) or NOT_APPLICABLE_PATTERN.search(norm):
+                continue                                  # N/A 宣告行
+            if title_norm and (norm in title_norm or title_norm in norm):
+                continue                                  # 標題（含換行/標點變體）
+            if len(norm) >= self._SUBSTANTIVE_LEN:
+                return False                              # 有實質長句 → 不是純 NA
+        return True
 
+    def _looks_like_financial_by_reference(self, plain: str) -> bool:
+        """Item 8 財報以「見另頁 / F-pages」方式呈現（內容只是指標而非實際報表）。
+        與 _classify 共用，確保 parser 與 ground truth 用同一套判斷。"""
+        body = self._normalize_ws(plain)
+        return FIN_STMT_BY_REF_PATTERN.search(body) is not None
+
+    def _lines_after_item_heading(self, plain: str, num: str) -> list[str]:
+        """只跳過開頭連續的「ITEM N.」編號行，回傳其後的非空白行（保留標題行，
+        由 _looks_not_applicable 自行以子字串比對處理）。"""
+        item_heading_re = re.compile(rf"^item\s+{re.escape(num)}\b", re.IGNORECASE)
         lines = [l.strip() for l in plain.splitlines() if l.strip()]
         idx = 0
-        while idx < len(lines):
-            norm = self._normalize_ws(lines[idx]).lower()
-            # 編號行（如 "ITEM 1B." 或 "ITEM 1B. UNRESOLVED STAFF COMMENTS"）
-            if item_heading_re.match(norm):
-                idx += 1
-                continue
-            # 獨立的標準標題行（如 "UNRESOLVED STAFF COMMENTS"）
-            if title_norm and norm == title_norm:
-                idx += 1
-                continue
-            break
+        while idx < len(lines) and item_heading_re.match(self._normalize_ws(lines[idx]).lower()):
+            idx += 1
         return lines[idx:]
 
     def _remove_internal_markers(self, text: str) -> str:

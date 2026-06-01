@@ -165,6 +165,20 @@ BY_REF_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# ── 3a-2. Item 8 財報以「見另頁 / F-pages」方式呈現 ───────────
+# 實際財報置於文件他處（如 Item 15 之後的 F-pages），Item 8 僅留一段指標文字。
+# 範例："See Index to Consolidated Financial Statements"
+#       "Reference is made to Pages ... of this ... Form 10-K"
+#       "...appear on pages 162-314"
+FIN_STMT_BY_REF_PATTERN = re.compile(
+    r"see\s+index\s+to\b|"
+    r"reference\s+is\s+made\s+to\s+pages?\b|"
+    r"appears?\s+(?:on|beginning\s+on)\s+pages?\b|"
+    r"set\s+forth\s+(?:on|beginning\s+on)\s+pages?\b|"
+    r"incorporat(?:ed|ion)\s+(?:herein\s+)?by\s+reference",
+    re.IGNORECASE,
+)
+
 # ── 3b. Not Applicable ───────────────────────────────────────
 # 範例匹配："Not applicable." / "N/A" / "None."
 NOT_APPLICABLE_PATTERN = re.compile(

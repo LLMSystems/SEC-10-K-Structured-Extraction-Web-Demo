@@ -29,16 +29,53 @@ from sec_10k_pipeline.models import (
 from sec_10k_pipeline.parsers.base import ParseResult
 from sec_10k_pipeline.patterns import ITEM_NUMBERS, HTML_TAG_PATTERN
 
-# ── 門檻（皆可調）────────────────────────────────────────────
-REQUIRED_CORE_ITEMS = {"1", "2", "3", "5", "7", "8", "9A", "15"}
-REQUIRED_UNLESS_SRC_ITEMS = {"1A", "7A"}      # smaller reporting company 豁免
-NATURALLY_LARGE_ITEMS = {"1A", "7", "8"}      # 天生大，過大檢查放寬
-OVERSIZED_RATIO = 0.45                        # 單一 item 佔全體可讀跨度比例上限
-OVERSIZED_MIN_READABLE = 50_000               # 過大檢查的絕對下限（可讀字元）
-OVERSIZED_MIN_ITEMS = 6                        # item 太少時不做過大檢查
-EXTRACTED_MIN_READABLE = 50                    # extracted 至少要有的可讀字元
-DOC_FLOOR_ERROR = 5_000                        # 全文可讀字元低於此 → error
-DOC_FLOOR_WARN = 20_000                        # 低於此 → warning
+# ── 門檻（依 eval_datasets 的逐 Item 剖面 analysis/item_profile.md 校準）──
+
+# 各 item 的「正常」status 集合（剖面觀察值）。status 不在集合內即為異常。
+# 例：Item 3 可為 not_applicable（無訴訟）、Item 8 可為 by_reference（財報見 F-pages）、
+#     Part III(10–14) 以 by_reference 為主，missing 屬異常。
+ITEM_EXPECTED_STATUS: dict[str, set[str]] = {
+    "1":  {"extracted"},
+    "1A": {"extracted"},
+    "1B": {"not_applicable", "extracted"},
+    "1C": {"extracted", "not_applicable", "missing"},   # 2023+ 新規，過渡期較不穩
+    "2":  {"extracted"},
+    "3":  {"extracted", "not_applicable"},
+    "4":  {"not_applicable", "extracted", "missing"},
+    "5":  {"extracted"},
+    "6":  {"reserved", "extracted", "not_applicable", "missing"},
+    "7":  {"extracted"},
+    "7A": {"extracted", "not_applicable"},              # SRC 常為 N/A
+    "8":  {"extracted", "incorporated_by_reference"},
+    "9":  {"not_applicable", "extracted", "missing"},
+    "9A": {"extracted"},
+    "9B": {"not_applicable", "extracted"},
+    "9C": {"not_applicable", "missing", "extracted"},
+    "10": {"incorporated_by_reference", "extracted"},
+    "11": {"incorporated_by_reference", "extracted"},
+    "12": {"incorporated_by_reference", "extracted"},
+    "13": {"incorporated_by_reference", "extracted"},
+    "14": {"incorporated_by_reference", "extracted"},
+    "15": {"extracted"},
+    "16": {"not_applicable", "extracted"},
+}
+# status 異常時視為 error 的核心 item（剖面顯示這些必須有實質內容/處理）。
+# 1/1A/2/5/7/9A/15 剖面 100% extracted；3 允許 N/A；8 允許 by_reference。
+CORE_ITEMS = {"1", "1A", "2", "3", "5", "7", "8", "9A", "15"}
+
+NATURALLY_LARGE_ITEMS = {"1", "1A", "7", "8"}  # 剖面 median 皆 ≥ 40k，過大檢查放寬
+OVERSIZED_RATIO = 0.45                         # 單一 item 佔全體可讀跨度比例上限
+OVERSIZED_MIN_READABLE = 50_000                # 過大檢查的絕對下限（可讀字元）
+OVERSIZED_MIN_ITEMS = 6                         # item 太少時不做過大檢查
+EXTRACTED_MIN_READABLE = 50                     # extracted 至少要有的可讀字元
+ITEM8_MIN_EXTRACTED_READABLE = 40_000           # Item 8 內嵌財報剖面 p5≈74k，低於此疑似 by_ref 指標
+# Item 1A 風險因子長度隨規模放大（剖面：非SRC median 70k vs SRC 41k，1.73×），
+# 是唯一資料支撐夠強、值得分層的 item。門檻設在各桶觀測最小值之下避免誤判：
+# 非SRC min≈27.5k、SRC min≈30k。大公司要求較高下限，小公司多給餘地。
+ITEM1A_MIN_NON_SRC = 25_000                     # 非SRC 的 1A 低於此 → 疑似過短
+ITEM1A_MIN_SRC = 20_000                         # SRC 的 1A 低於此 → 疑似過短
+DOC_FLOOR_ERROR = 30_000                        # 全文可讀字元低於此 → error（剖面最小全文 >100k）
+DOC_FLOOR_WARN = 80_000                         # 低於此 → warning
 CONFIDENCE_THRESHOLD = 0.7
 
 _ANCHOR_MARKER = re.compile(r"\[\[ANCHOR:[^\]]+\]\]")
@@ -87,7 +124,9 @@ class Validator:
         coverage_ratio = 0.0
         oversized_flags, coverage_ratio = self._rule3_oversized(raw_items, text)
         flags += oversized_flags
-        flags += self._rule4_required_missing(items, metadata)
+        flags += self._rule4_item_status(items, metadata)
+        flags += self._rule_item8_financials(items)
+        flags += self._rule_1a_undersized(items, metadata)
         flags += self._rule5_status_contract(items)
         flags += self._rule6_extracted_empty(items)
         flags += self._rule7_document_length(text)
@@ -192,43 +231,91 @@ class Validator:
                     ))
         return flags, coverage_ratio
 
-    # ── Rule 4：必要 item 缺失 ─────────────────────────────────
-    def _rule4_required_missing(
+    # ── Rule 4：per-item status 是否符合剖面預期 ────────────────
+    def _rule4_item_status(
         self, items: list[ItemResult], metadata: FilingMetadata
     ) -> list[ValidationFlag]:
-        status_map = {item.item_number: item.status for item in items}
+        """依 ITEM_EXPECTED_STATUS 檢查每個 item 的 status 是否落在「正常」集合。
+        核心 item 異常 → error；其餘 → warning。1A 對 SRC 可豁免，降為 warning。"""
         is_src = bool(
             metadata.filer_category
             and "smaller reporting" in metadata.filer_category.lower()
         )
-        # 視為「沒抓到實質內容」的 status
-        bad = {"missing", "not_applicable", "reserved"}
+        flags: list[ValidationFlag] = []
+        for item in items:
+            num, status = item.item_number, item.status
+            expected = ITEM_EXPECTED_STATUS.get(num)
+            if expected is None or status in expected:
+                continue
+
+            if num in CORE_ITEMS:
+                # SRC 在法規上可省略 Item 1A，降為 warning
+                if num == "1A" and is_src:
+                    severity, code = "warning", "recommended_item_missing"
+                else:
+                    severity, code = "error", "required_item_missing"
+                msg = f"核心 Item {num} 的 status 異常（status={status}，預期 {sorted(expected)}）"
+            else:
+                severity, code = "warning", "unexpected_item_status"
+                msg = f"Item {num} 的 status 異常（status={status}，預期 {sorted(expected)}）"
+
+            flags.append(ValidationFlag(
+                code=code,
+                severity=severity,
+                item_number=num,
+                message=msg,
+                detail={"status": status, "expected": sorted(expected)},
+            ))
+        return flags
+
+    # ── Rule 4b：Item 8 財報過短（疑似未偵測的 by_reference 指標）──
+    def _rule_item8_financials(self, items: list[ItemResult]) -> list[ValidationFlag]:
+        flags: list[ValidationFlag] = []
+        for item in items:
+            if item.item_number != "8" or item.status != "extracted":
+                continue
+            rl = _readable_length(item.content_text or "")
+            if rl < ITEM8_MIN_EXTRACTED_READABLE:
+                flags.append(ValidationFlag(
+                    code="item8_undersized",
+                    severity="warning",
+                    item_number="8",
+                    message=(
+                        f"Item 8 標記 extracted 但可讀內容僅 {rl:,} 字"
+                        f"（正常內嵌財報剖面 p5≈74k），疑似未被偵測的 by_reference 指標"
+                    ),
+                    detail={"readable_len": rl, "expected_min": ITEM8_MIN_EXTRACTED_READABLE},
+                ))
+        return flags
+
+    # ── Rule 4c：Item 1A 風險因子過短（門檻分 SRC / 非SRC）──────
+    def _rule_1a_undersized(
+        self, items: list[ItemResult], metadata: FilingMetadata
+    ) -> list[ValidationFlag]:
+        """1A 是唯一長度明顯隨規模放大的 item，故門檻分兩段：
+        非SRC 下限較高（大公司 1A 太短更可疑），SRC 下限較低。"""
+        is_src = bool(
+            metadata.filer_category
+            and "smaller reporting" in metadata.filer_category.lower()
+        )
+        floor = ITEM1A_MIN_SRC if is_src else ITEM1A_MIN_NON_SRC
 
         flags: list[ValidationFlag] = []
-        for num in REQUIRED_CORE_ITEMS:
-            status = status_map.get(num)
-            if status is None or status in bad:
+        for item in items:
+            if item.item_number != "1A" or item.status != "extracted":
+                continue
+            rl = _readable_length(item.content_text or "")
+            if rl < floor:
                 flags.append(ValidationFlag(
-                    code="required_item_missing",
-                    severity="error",
-                    item_number=num,
-                    message=f"核心必要 Item {num} 未成功抽取（status={status}）",
-                    detail={"status": status},
+                    code="item1a_undersized",
+                    severity="warning",
+                    item_number="1A",
+                    message=(
+                        f"Item 1A 可讀內容僅 {rl:,} 字，低於"
+                        f"{'SRC' if is_src else '非SRC'}下限 {floor:,}，疑似被截斷或漏抓"
+                    ),
+                    detail={"readable_len": rl, "floor": floor, "is_src": is_src},
                 ))
-        if not is_src:
-            for num in REQUIRED_UNLESS_SRC_ITEMS:
-                status = status_map.get(num)
-                if status is None or status in bad:
-                    flags.append(ValidationFlag(
-                        code="recommended_item_missing",
-                        severity="warning",
-                        item_number=num,
-                        message=(
-                            f"Item {num} 未抽取（status={status}）；"
-                            "非 smaller reporting company 通常應有此 Item"
-                        ),
-                        detail={"status": status},
-                    ))
         return flags
 
     # ── Rule 5：status↔欄位契約 ────────────────────────────────
