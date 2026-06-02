@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ArrowLeft, FileText, LayoutDashboard, Moon, Sun } from 'lucide-vue-next'
+import { ArrowLeft, FileSearch, FileText, LayoutDashboard, Moon, Sun } from 'lucide-vue-next'
 import Button from '@/components/ui/Button.vue'
 import { useThemeStore } from '@/stores/theme'
 import { useJobStore } from '@/stores/job'
@@ -12,6 +12,11 @@ const themeStore = useThemeStore()
 const jobStore = useJobStore()
 
 const isResult = computed(() => route.name === 'result')
+// 離開 result 頁後（例如切到後台）仍保有可回去的入口；
+// jobId 留在 Pinia，回到 /result/:jobId 後 ResultView 會自動還原內容。
+const showBackToResult = computed(
+  () => !!jobStore.jobId && route.name !== 'result',
+)
 const companyName = computed(
   () => jobStore.filingResult?.filing_info.company_name ?? null,
 )
@@ -63,6 +68,14 @@ function goHome() {
       </template>
 
       <div class="ml-auto flex items-center gap-1">
+        <RouterLink
+          v-if="showBackToResult"
+          :to="`/result/${jobStore.jobId}`"
+          class="inline-flex h-9 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <FileSearch class="h-4 w-4" />
+          <span class="hidden sm:inline">解析結果</span>
+        </RouterLink>
         <RouterLink
           to="/admin"
           class="inline-flex h-9 items-center gap-1.5 rounded-md px-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"

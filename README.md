@@ -255,3 +255,4 @@ markdown = get_item8_markdown("0000104169", "0000104169-24-000056")
 - [docs/api.md](docs/api.md) — API 端點使用說明
 - [docs/api-design.md](docs/api-design.md) — 後端架構設計
 - [docs/frontend-design.md](docs/frontend-design.md) — 前端視覺與互動設計
+- [docs/validator-rules.md](docs/validator-rules.md) — 驗證層規則與品質報告（含數據出處）

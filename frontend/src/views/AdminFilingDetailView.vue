@@ -6,10 +6,11 @@ import Card from '@/components/ui/Card.vue'
 import Button from '@/components/ui/Button.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import ItemStatusBadge from '@/components/result/ItemStatusBadge.vue'
+import ItemDetailDrawer from '@/components/admin/ItemDetailDrawer.vue'
 import { api } from '@/lib/api'
 import { statusLabel } from '@/lib/statusLabels'
 import { flagLabel, scoreColor, severityClasses } from '@/lib/flagLabels'
-import type { FilingOutput, ValidationFlag } from '@/types/api'
+import type { FilingItem, FilingOutput, ValidationFlag } from '@/types/api'
 
 const props = defineProps<{ accession: string }>()
 const router = useRouter()
@@ -46,6 +47,18 @@ const itemFlagMap = computed(() => {
   }
   return map
 })
+
+// 點列 → 右側抽屜看該 item 的完整內容；關閉後保留 selectedItem 讓滑出動畫完整。
+const selectedItem = ref<FilingItem | null>(null)
+const drawerOpen = ref(false)
+const selectedItemFlags = computed(() =>
+  selectedItem.value ? itemFlagMap.value[selectedItem.value.item_number] ?? [] : [],
+)
+
+function openItem(item: FilingItem) {
+  selectedItem.value = item
+  drawerOpen.value = true
+}
 
 function rowHighlight(itemNumber: string): string {
   const flags = itemFlagMap.value[itemNumber] ?? []
@@ -193,8 +206,9 @@ function fmtConf(c: number | null): string {
 
       <!-- Items table -->
       <Card class="overflow-hidden">
-        <div class="border-b border-border px-4 py-3 text-sm font-medium text-foreground">
-          Items ({{ filing.items.length }})
+        <div class="flex items-center justify-between border-b border-border px-4 py-3">
+          <span class="text-sm font-medium text-foreground">Items ({{ filing.items.length }})</span>
+          <span class="text-xs text-muted-foreground">點任一列查看內容</span>
         </div>
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
@@ -212,8 +226,9 @@ function fmtConf(c: number | null): string {
               <tr
                 v-for="item in filing.items"
                 :key="item.item_number"
-                class="border-b border-border/60"
+                class="cursor-pointer border-b border-border/60 transition-colors hover:bg-accent/50"
                 :class="rowHighlight(item.item_number)"
+                @click="openItem(item)"
               >
                 <td class="px-4 py-2.5 font-mono text-xs font-medium text-foreground">
                   {{ item.item_number }}
@@ -251,5 +266,12 @@ function fmtConf(c: number | null): string {
         </div>
       </Card>
     </template>
+
+    <ItemDetailDrawer
+      :open="drawerOpen"
+      :item="selectedItem"
+      :flags="selectedItemFlags"
+      @close="drawerOpen = false"
+    />
   </div>
 </template>

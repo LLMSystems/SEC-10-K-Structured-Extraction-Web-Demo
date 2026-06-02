@@ -18,6 +18,7 @@ import TabsTrigger from '@/components/ui/TabsTrigger.vue'
 import TabsContent from '@/components/ui/TabsContent.vue'
 import FlagAnalyticsPanel from '@/components/admin/FlagAnalyticsPanel.vue'
 import SystemHealthPanel from '@/components/admin/SystemHealthPanel.vue'
+import ValidatorRulesPanel from '@/components/admin/ValidatorRulesPanel.vue'
 import { api } from '@/lib/api'
 import { scoreColor } from '@/lib/flagLabels'
 import type {
@@ -185,6 +186,7 @@ const sortOptions: { value: FilingSort; label: string }[] = [
       <TabsList class="mb-4">
         <TabsTrigger value="queue">待審佇列</TabsTrigger>
         <TabsTrigger value="analytics">規則分析</TabsTrigger>
+        <TabsTrigger value="rules">驗證規則</TabsTrigger>
         <TabsTrigger value="system">系統健康</TabsTrigger>
       </TabsList>
 
@@ -294,6 +296,11 @@ const sortOptions: { value: FilingSort; label: string }[] = [
       <!-- ④ 規則分析 -->
       <TabsContent value="analytics">
         <FlagAnalyticsPanel />
+      </TabsContent>
+
+      <!-- 驗證規則（靜態文件） -->
+      <TabsContent value="rules">
+        <ValidatorRulesPanel />
       </TabsContent>
 
       <!-- ⑤ 系統健康 -->
