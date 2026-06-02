@@ -98,7 +98,7 @@ function fmtTime(iso: string | null): string {
         v-if="data.recent_failures.length === 0"
         class="px-4 py-10 text-center text-sm text-muted-foreground"
       >
-        沒有失敗的 job 🎉
+        沒有失敗的 job
       </div>
       <ul v-else class="divide-y divide-border/60">
         <li v-for="job in data.recent_failures" :key="job.job_id" class="px-4 py-3">
