@@ -4,11 +4,7 @@
 
 **將 SEC 10-K 申報文件轉換為結構化資料與可讀 Markdown 的 Demo**
 
-![web0](assets/image0.png)
-
-![web1](assets/image1.png)
-
-![web2](assets/image2.png)
+https://github.com/user-attachments/assets/02e51b12-4362-44bf-afa3-aca48c5852c0
 
 </div>
 
