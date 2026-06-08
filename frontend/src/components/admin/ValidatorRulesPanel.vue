@@ -113,6 +113,16 @@ const rules: RuleRow[] = [
     detail:
       'parse_result.confidence < 0.7（CONFIDENCE_THRESHOLD）→ low_confidence_parse；任一 raw item confidence < 0.7 → low_confidence_item。info 不影響分數與有效性，僅提示。',
   },
+  {
+    id: '9',
+    codes: ['low_item_coverage'],
+    severities: ['error', 'warning'],
+    severityNote: '< 25% 為 error，25–50% 為 warning',
+    target: 'items',
+    summary: '所有 item 可讀字數加總應接近全文總字數',
+    detail:
+      '將所有 item 的 content_text 可讀字數（去 HTML 與 marker 後）加總，除以全文可讀字數。比例 < 50%（ITEM_COVERAGE_WARN）→ warning；< 25%（ITEM_COVERAGE_ERROR）→ error。incorporated_by_reference / not_applicable 等無 content_text，故門檻設得寬鬆。觸發時通常代表 parser 切割嚴重失敗，有大段內容未歸屬到任何 Item。',
+  },
 ]
 
 // ITEM_EXPECTED_STATUS：每個 item 的「正常」status 集合

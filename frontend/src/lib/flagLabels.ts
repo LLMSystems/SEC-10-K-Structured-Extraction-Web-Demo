@@ -16,6 +16,7 @@ const FLAG_LABELS: Record<string, string> = {
   document_short: '全文偏短',
   low_confidence_parse: '整份信心偏低',
   low_confidence_item: 'Item 信心偏低',
+  low_item_coverage: 'Item 總覆蓋率不足',
 }
 
 export function flagLabel(code: string): string {
