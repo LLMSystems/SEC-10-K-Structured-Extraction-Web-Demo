@@ -2,7 +2,9 @@
 
 # SEC-10-K-Structured-Extraction-Web-Demo
 
-**將 SEC 10-K 申報文件轉換為結構化資料與可讀 Markdown 的 Demo**
+**A demo that converts SEC 10-K filings into structured data and human-readable Markdown**
+
+[English](README.md) | [中文](README_zh-CN.md)
 
 https://github.com/user-attachments/assets/02e51b12-4362-44bf-afa3-aca48c5852c0
 
@@ -10,196 +12,198 @@ https://github.com/user-attachments/assets/02e51b12-4362-44bf-afa3-aca48c5852c0
 
 ---
 
-## 一、功能概覽
+## 1. Features
 
-本專案提供一站式的 SEC 10-K 年報解析服務，從原始 EDGAR 文件抽取結構化資料並渲染為人類可讀的格式。
+A one-stop service for parsing SEC 10-K annual reports — extracting structured data from raw EDGAR filings and rendering them into human-readable formats.
 
-- **Item 結構化抽取**：自動識別並分割 10-K 內各個 Item（Part I / II / III / IV），輸出標準化的 `FilingOutput` JSON
-- **Item Status 標註**：區分 `extracted` / `incorporated_by_reference` / `not_applicable` / `reserved` / `missing` 五種狀態
-- **XBRL 財報擷取**：從 XBRL Instance + Presentation + Label Linkbase 直接還原 Item 8 主要財務報表
-- **Markdown 渲染**：將 XBRL Facts 渲染為可讀的 Markdown，包含主表（Income Statement、Balance Sheet、Cash Flow 等）、數字附註與文字揭露
-- **非同步 Job Queue**：請求送出後立即取得 `job_id`，背景處理完成後可輪詢取回結果
-- **Cache 機制**：以 `accession_number` 作為 Cache Key，相同申報文件只處理一次
-- **雙輸入模式**：支援 `cik + accession_number` 或直接給 EDGAR URL 兩種輸入方式
+- **Structured Item Extraction**: Automatically identifies and splits all Items in a 10-K (Part I / II / III / IV), outputting a standardized `FilingOutput` JSON
+- **Item Status Labeling**: Distinguishes five statuses — `extracted` / `incorporated_by_reference` / `not_applicable` / `reserved` / `missing`
+- **XBRL Financial Data Extraction**: Reconstructs Item 8 financial statements directly from XBRL Instance + Presentation + Label Linkbase
+- **Markdown Rendering**: Renders XBRL facts into readable Markdown, including primary statements (Income Statement, Balance Sheet, Cash Flow, etc.), numeric footnotes, and text disclosures
+- **Async Job Queue**: Returns a `job_id` immediately upon submission; poll to retrieve results after background processing completes
+- **Caching**: Uses `accession_number` as the cache key — identical filings are only processed once
+- **Dual Input Modes**: Accepts either `cik + accession_number` or a direct EDGAR URL
+- **Admin Panel**: System health dashboard (job status distribution, recent failures), flag analytics (rule trigger frequency, problematic items, per-parser performance, stage timing), validator rule reference, and an item detail drawer with lazy-loaded content
 
 ---
 
-## 二、專案架構
+## 2. Project Structure
 
 ```
 SEC-10-K-Structured-Extraction-Web-Demo/
-├── api/                              # 後端 FastAPI 服務
-│   ├── main.py                       # FastAPI app 入口、lifespan、CORS
+├── api/                              # FastAPI backend
+│   ├── main.py                       # FastAPI app entrypoint, lifespan, CORS
 │   ├── routes.py                     # POST /jobs, GET /jobs/{id}, POST /xbrl-markdown ...
-│   ├── worker.py                     # 背景 Job Worker（asyncio）
-│   ├── cache.py                      # CacheService（filings / jobs 讀寫封裝）
-│   ├── db.py                         # aiosqlite schema 初始化
-│   ├── utils.py                      # SEC URL 解析等工具
-│   ├── item8_markdown.py             # 一步式 XBRL → Markdown 便利函數
+│   ├── worker.py                     # Background job worker (asyncio)
+│   ├── cache.py                      # CacheService (filings / jobs read-write wrapper)
+│   ├── db.py                         # aiosqlite schema initialization
+│   ├── utils.py                      # SEC URL parsing and utilities
+│   ├── item8_markdown.py             # One-step XBRL → Markdown convenience function
 │   ├── models/
-│   │   └── job.py                    # API 專用 request/response schema
-│   ├── sec_10k_pipeline/             # 解析引擎
-│   │   ├── pipeline.py               # 同步 Pipeline
-│   │   ├── async_pipeline.py         # 非同步版本（httpx + executor）
-│   │   ├── postprocessor.py          # Item 後處理（清理、標註 status）
-│   │   ├── patterns.py               # 正則樣式
+│   │   └── job.py                    # API request/response schemas
+│   ├── sec_10k_pipeline/             # Parsing engine
+│   │   ├── pipeline.py               # Synchronous pipeline
+│   │   ├── async_pipeline.py         # Async version (httpx + executor)
+│   │   ├── postprocessor.py          # Item post-processing (cleanup, status labeling)
+│   │   ├── patterns.py               # Regex patterns
 │   │   ├── models.py                 # FilingInput / FilingOutput / ItemResult
-│   │   ├── item8_xbrl_facts.py       # XBRL 解析（Instance + Presentation + Label）
-│   │   ├── render_item8_markdown.py  # XBRL → Markdown 渲染
+│   │   ├── item8_xbrl_facts.py       # XBRL parsing (Instance + Presentation + Label)
+│   │   ├── render_item8_markdown.py  # XBRL → Markdown rendering
 │   │   └── parsers/
 │   │       ├── regex_parser.py       # Regex parser
 │   │       ├── llm_parser.py         # LLM-assisted parser
-│   │       └── hybrid.py             # Hybrid parser（regex + LLM fallback）
+│   │       └── hybrid.py             # Hybrid parser (regex + LLM fallback)
 │   └── requirements.txt
 │
-├── frontend/                         # Vue 3 前端
+├── frontend/                         # Vue 3 frontend
 │   ├── src/
-│   │   ├── views/                    # 頁面元件
-│   │   ├── components/               # 共用元件（含 shadcn-vue）
+│   │   ├── views/                    # Page components
+│   │   ├── components/               # Shared components (including shadcn-vue)
 │   │   ├── stores/                   # Pinia stores
 │   │   ├── router/                   # Vue Router
-│   │   ├── types/                    # TypeScript 型別
-│   │   └── lib/                      # API client、utils
+│   │   ├── types/                    # TypeScript types
+│   │   └── lib/                      # API client, utils
 │   ├── package.json
 │   └── vite.config.ts
 │
 ├── docs/
-│   ├── api.md                        # API 使用文檔
-│   ├── api-design.md                 # API 架構設計
-│   └── frontend-design.md            # 前端設計文檔
+│   ├── api.md                        # API usage documentation
+│   ├── api-design.md                 # API architecture design
+│   └── frontend-design.md            # Frontend design documentation
 │
-├── assets/                           # README 截圖
+├── assets/                           # README screenshots
 └── README.md
 ```
 
-## 三、技術選型
+## 3. Tech Stack
 
-### 後端
+### Backend
 
-| 類別 | 技術 | 用途 |
+| Category | Technology | Purpose |
 |---|---|---|
-| Web Framework | **FastAPI** | 路由、自動 OpenAPI 文檔、Pydantic 驗證 |
-| ASGI Server | **Uvicorn** | 開發與正式環境執行 |
-| HTTP Client | **httpx** / **requests** | SEC EDGAR 文件下載 |
-| 資料庫 | **SQLite** (`aiosqlite`) | Jobs / Filings cache，可平移至 PostgreSQL |
-| 任務佇列 | **asyncio.Queue** | 輕量級背景 Job Queue |
-| HTML / XML 解析 | **lxml** / **BeautifulSoup** | XBRL 與 10-K HTML 處理 |
-| 文字比對 | **rapidfuzz** | Item 標題模糊匹配 |
-| 表格渲染 | **tabulate** / **tabulate_html** | HTML 表格轉 Markdown |
-| 資料模型 | **Pydantic** | FilingInput / FilingOutput 強型別 |
+| Web Framework | **FastAPI** | Routing, automatic OpenAPI docs, Pydantic validation |
+| ASGI Server | **Uvicorn** | Development and production server |
+| HTTP Client | **httpx** / **requests** | SEC EDGAR document downloads |
+| Database | **SQLite** (`aiosqlite`) | Jobs / filings cache; portable to PostgreSQL |
+| Task Queue | **asyncio.Queue** | Lightweight background job queue |
+| HTML / XML Parsing | **lxml** / **BeautifulSoup** | XBRL and 10-K HTML processing |
+| Fuzzy Matching | **rapidfuzz** | Item title fuzzy matching |
+| Table Rendering | **tabulate** / **tabulate_html** | HTML table to Markdown conversion |
+| Data Models | **Pydantic** | Strongly typed FilingInput / FilingOutput |
 
-### 前端
+### Frontend
 
-| 類別 | 技術 | 用途 |
+| Category | Technology | Purpose |
 |---|---|---|
-| Framework | **Vue 3**（`^3.5`） | Composition API + `<script setup>` |
-| Language | **TypeScript**（`~6.0`） | 全程強型別 |
-| Build Tool | **Vite**（`^8.0`） | 開發伺服器與打包 |
-| Router | **Vue Router**（`^5.0`） | SPA 路由 |
-| State | **Pinia**（`^3.0`） | 全域狀態管理 |
-| UI Kit | **shadcn-vue** + **Tailwind CSS v4** | Zinc 主題、Light/Dark 雙模式 |
-| Icons | **lucide-vue-next** | 圖示 |
-| Markdown | **markdown-it** + **dompurify** | Item 8 Markdown 渲染 |
+| Framework | **Vue 3** (`^3.5`) | Composition API + `<script setup>` |
+| Language | **TypeScript** (`~6.0`) | End-to-end strong typing |
+| Build Tool | **Vite** (`^8.0`) | Dev server and bundling |
+| Router | **Vue Router** (`^5.0`) | SPA routing |
+| State | **Pinia** (`^3.0`) | Global state management |
+| UI Kit | **shadcn-vue** + **Tailwind CSS v4** | Zinc theme, light/dark mode |
+| Icons | **lucide-vue-next** | Icons |
+| Markdown | **markdown-it** + **dompurify** | Item 8 Markdown rendering |
 
 ---
 
-## 四、快速開始
+## 4. Quick Start
 
-### 環境需求
+### Prerequisites
 
 - Python `>= 3.10`
 - Node.js `>= 18`
 - npm
 
-### 1. 啟動後端
+### 1. Start the backend
 
 ```bash
 cd api
 pip install -r requirements.txt
 
-# 啟動 API（預設 http://localhost:8000）
+# Start the API (default: http://localhost:8000)
 uvicorn main:app --reload
 ```
 
-互動式 API 文檔：`http://localhost:8000/docs`
+Interactive API docs: `http://localhost:8000/docs`
 
-### 2. 啟動前端
+### 2. Start the frontend
 
 ```bash
 cd frontend
 npm install
 npm run dev
-# 開發伺服器預設 http://localhost:5173
+# Dev server default: http://localhost:5173
 ```
 
-### 3. 環境變數
-**後端**
+### 3. Environment variables
 
-| 變數 | 預設值 | 說明 |
+**Backend**
+
+| Variable | Default | Description |
 |---|---|---|
-| `DB_PATH` | `./data/sec_extraction.db` | SQLite 資料庫路徑 |
-| `CORS_ORIGINS` | `http://localhost:5173` | 允許跨域來源（逗號分隔） |
+| `DB_PATH` | `./data/sec_extraction.db` | SQLite database path |
+| `CORS_ORIGINS` | `http://localhost:5173` | Allowed CORS origins (comma-separated) |
 
-可在 `api/.env` 設定。
+Configure in `api/.env`.
 
-**前端**
+**Frontend**
 
-| 變數 | 預設值 | 說明 |
+| Variable | Default | Description |
 |---|---|---|
-| `VITE_API_BASE_URL` | `自行填入` | 後端網址 |
+| `VITE_API_BASE_URL` | *(fill in)* | Backend URL |
 
-可在 `frontend/.env` 設定。
+Configure in `frontend/.env`.
 
-### 4. 端到端測試
+### 4. End-to-end test
 
 ```bash
-# 送出解析請求
+# Submit a parsing request
 curl -X POST http://localhost:8000/jobs \
   -H "Content-Type: application/json" \
   -d '{"cik":"0000320193","accession_number":"0000320193-23-000106"}'
 # → { "job_id": "...", "status": "pending", "cache_hit": false }
 
-# 取得 Item 8 XBRL Markdown
+# Fetch Item 8 XBRL Markdown
 curl -X POST http://localhost:8000/xbrl-markdown \
   -H "Content-Type: application/json" \
   -d '{"cik":"0000104169","accession_number":"0000104169-24-000056"}' \
   -o report.md
 ```
 
-或直接以 Python 使用解析模組：
+Or use the parsing module directly in Python:
 
 ```python
 from api.sec_10k_pipeline.item8_xbrl_facts import get_item8_xbrl_facts
 from api.sec_10k_pipeline.render_item8_markdown import render_markdown
 from api.item8_markdown import get_item8_markdown
 
-# 兩步式
+# Two-step
 payload = get_item8_xbrl_facts("0000104169", "0000104169-24-000056")
 markdown = render_markdown(payload)
 
-# 一步式
+# One-step
 markdown = get_item8_markdown("0000104169", "0000104169-24-000056")
 ```
 
 ---
 
-## 五、API 摘要
+## 5. API Reference
 
-完整文檔請見 [docs/api.md](docs/api.md)。
+See [docs/api.md](docs/api.md) for full documentation.
 
-| 方法 | 路徑 | 功能 | 同步性 |
+| Method | Path | Description | Mode |
 |---|---|---|---|
-| `POST` | `/jobs` | 送出 10-K 解析請求，立即取得 `job_id` | 非同步 |
-| `GET` | `/jobs/{job_id}` | 輪詢 Job 狀態與 `FilingOutput` 結果 | — |
-| `GET` | `/filings/{accession_number}` | 直接從 Cache 取已完成的 `FilingOutput`（cache miss 回 404） | — |
-| `POST` | `/xbrl-markdown` | 同步擷取 XBRL 並渲染為 Markdown，回 `text/markdown` | 同步 |
+| `POST` | `/jobs` | Submit a 10-K parsing request, get `job_id` immediately | Async |
+| `GET` | `/jobs/{job_id}` | Poll job status and retrieve `FilingOutput` result | — |
+| `GET` | `/filings/{accession_number}` | Fetch a completed `FilingOutput` from cache (404 on miss) | — |
+| `POST` | `/xbrl-markdown` | Synchronously extract XBRL and render to Markdown (`text/markdown`) | Sync |
 
 ### POST `/jobs`
 
 ```json
 // Request
 { "cik": "0000320193", "accession_number": "0000320193-23-000106" }
-// 或
+// or
 { "url": "https://www.sec.gov/Archives/edgar/data/320193/.../aapl-20250927.htm" }
 
 // Response 202
@@ -236,19 +240,19 @@ markdown = get_item8_markdown("0000104169", "0000104169-24-000056")
 
 ### Item Status
 
-| Status | 說明 |
+| Status | Description |
 |---|---|
-| `extracted` | 成功抽取內容，`content_text` 有值 |
-| `incorporated_by_reference` | 引用其他文件（常見於 Part III） |
-| `not_applicable` | 公司明確表示不適用 |
-| `reserved` | SEC 規定保留（如 Item 6） |
-| `missing` | Parser 找不到此 Item |
+| `extracted` | Content successfully extracted; `content_text` is populated |
+| `incorporated_by_reference` | References another document (common in Part III) |
+| `not_applicable` | Company explicitly states not applicable |
+| `reserved` | SEC-reserved item (e.g. Item 6) |
+| `missing` | Parser could not locate this item |
 
 ---
 
-## 文件索引
+## Documentation
 
-- [docs/api.md](docs/api.md) — API 端點使用說明
-- [docs/api-design.md](docs/api-design.md) — 後端架構設計
-- [docs/frontend-design.md](docs/frontend-design.md) — 前端視覺與互動設計
-- [docs/validator-rules.md](docs/validator-rules.md) — 驗證層規則與品質報告（含數據出處）
+- [docs/api.md](docs/api.md) — API endpoint reference
+- [docs/api-design.md](docs/api-design.md) — Backend architecture design
+- [docs/frontend-design.md](docs/frontend-design.md) — Frontend visual and interaction design
+- [docs/validator-rules.md](docs/validator-rules.md) — Validator rules and quality report (with data sources)
